@@ -101,7 +101,7 @@ def convert(source, output=None, *, force=False, strict=False, reference_doc=Non
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Markdown·DOCX → 실제 HWP 5 변환기")
+    parser = argparse.ArgumentParser(description="Md-docx-to-hwp: Markdown·DOCX → HWP 5 단방향 변환기")
     parser.add_argument("input", type=Path)
     parser.add_argument("-o", "--output", type=Path)
     parser.add_argument("--force", action="store_true", help="기존 출력 파일 덮어쓰기")

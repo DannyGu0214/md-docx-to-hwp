@@ -1,7 +1,8 @@
-Markdown DOCX HWP 변환기
+Md-docx-to-hwp
 2026-10-14 / macbook-15
 
 Markdown(.md, .markdown)와 DOCX를 바이너리 HWP 5 문서로 변환한다.
+단방향 변환에 집중하며 HWP → DOCX 변환은 개발 범위에 포함하지 않는다.
 파일 변환은 로컬에서 실행되며, 원격 이미지나 문서 업로드를 하지 않는다.
 출력 파일을 다시 읽어 확인한 뒤 최종 파일로 저장한다.
 
