@@ -54,13 +54,17 @@ def inspect_hwp(path):
     return json.loads(result.stdout)
 
 
-def convert(source, output=None, *, force=False, strict=False):
+def convert(source, output=None, *, force=False, strict=False, reference_doc=None):
     from converter.inputs import parse_input
     source = Path(source).expanduser().resolve()
     if not source.is_file():
         raise ValueError(f"입력 파일이 없어요: {source}")
     if source.suffix.lower() not in (".md", ".markdown", ".docx"):
         raise ValueError("입력 형식은 .md, .markdown, .docx만 지원해요.")
+    if reference_doc is not None:
+        reference_doc = Path(reference_doc).expanduser().resolve()
+        if not reference_doc.is_file() or reference_doc.suffix.lower() != ".hwp":
+            raise ValueError("기준 문서는 존재하는 .hwp 파일이어야 해요.")
     output = Path(output).expanduser().absolute() if output else source.with_suffix(".hwp")
     if output.suffix.lower() != ".hwp":
         raise ValueError("출력 파일의 확장자는 .hwp여야 해요.")
@@ -70,6 +74,8 @@ def convert(source, output=None, *, force=False, strict=False):
     with tempfile.TemporaryDirectory(prefix="hwp-convert-", dir=output.parent) as temp:
         work = Path(temp)
         model = parse_input(source, work / "assets")
+        if reference_doc is not None:
+            model["reference_doc"] = str(reference_doc)
         if strict and model["warnings"]:
             raise ValueError("지원 범위 경고가 있어 변환을 중단했어요:\n" + "\n".join(model["warnings"]))
         intermediate = work / "document.json"
@@ -101,9 +107,11 @@ def main():
     parser.add_argument("--force", action="store_true", help="기존 출력 파일 덮어쓰기")
     parser.add_argument("--strict", action="store_true", help="지원 범위 경고가 있으면 저장하지 않기")
     parser.add_argument("--json", action="store_true", help="변환 결과를 JSON으로 출력")
+    parser.add_argument("--reference-doc", type=Path, help="스타일·용지 설정을 가져올 HWP 기준 문서")
     args = parser.parse_args()
     try:
-        result = convert(args.input, args.output, force=args.force, strict=args.strict)
+        result = convert(args.input, args.output, force=args.force, strict=args.strict,
+                         reference_doc=args.reference_doc)
     except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired, ImportError) as error:
         print(f"오류: {error}", file=sys.stderr)
         return 1

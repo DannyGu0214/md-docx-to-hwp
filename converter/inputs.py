@@ -35,9 +35,9 @@ def _paragraph(runs=None, heading=0, alignment="left", **extra):
 
 
 def _append_run(runs, run):
-    if not run["text"]:
+    if not run["text"] and not any(k in run for k in ("footnote", "field")):
         return
-    if runs and {k: v for k, v in runs[-1].items() if k != "text"} == {
+    if not any(k in run for k in ("footnote", "field")) and runs and {k: v for k, v in runs[-1].items() if k != "text"} == {
             k: v for k, v in run.items() if k != "text"}:
         runs[-1]["text"] += run["text"]
     else:
@@ -123,9 +123,8 @@ def _md_inline(nodes, source, assets, warnings, style=None):
                 alt = "".join(x.get("raw", "") for x in node.get("children", []))
                 result.append(_run(f"[image: {alt}]", **style))
         elif kind == "link":
-            _warn(warnings, "Hyperlinks are converted to formatted text; link targets are omitted.")
             result.extend(_md_inline(node.get("children", []), source, assets,
-                                     warnings, {**style, "underline": True}))
+                                     warnings, {**style, "underline": True, "href": node.get("attrs", {}).get("url", "")}))
         else:
             _warn(warnings, f"Unsupported Markdown inline feature: {kind}")
             if "children" in node:
@@ -252,6 +251,9 @@ def _docx_style(run, paragraph):
         value = next((getattr(font, property_name) for font in styles
                       if getattr(font, property_name) is not None), default)
         result[property_name] = bool(value)
+    for attr in ("superscript", "subscript"):
+        result[attr] = bool(next((getattr(font, attr) for font in styles
+                                 if getattr(font, attr) is not None), False))
     for property_name, key in (("size", "size"), ("name", "font")):
         value = next((getattr(font, property_name) for font in styles
                       if getattr(font, property_name) is not None), None)
@@ -269,6 +271,7 @@ class _DocxReader:
         self.assets = assets
         self.warnings = warnings
         self.list_counters = {}
+        self.notes = {}
 
     def list_prefix(self, paragraph):
         from docx.oxml.ns import qn
@@ -313,7 +316,7 @@ class _DocxReader:
             _warn(self.warnings, "Unresolved DOCX list numbering is converted to a bullet.")
             return "  " * level + "•"
 
-    def image(self, drawing):
+    def image(self, drawing, part=None):
         from docx.oxml.ns import qn
         blips = drawing.xpath(".//a:blip")
         if not blips:
@@ -325,7 +328,7 @@ class _DocxReader:
             _warn(self.warnings, "An externally linked DOCX image was not fetched.")
             return None
         try:
-            part = self.document.part.related_parts[rel_id]
+            part = (part or self.document.part).related_parts[rel_id]
         except KeyError:
             _warn(self.warnings, "An unresolved DOCX image relationship was omitted.")
             return None
@@ -361,7 +364,9 @@ class _DocxReader:
         if paragraph.alignment is None and style:
             alignment = {0: "left", 1: "center", 2: "right", 3: "justify"}.get(
                 style.paragraph_format.alignment, "left")
-        properties = {"heading": heading, "alignment": alignment}
+        from .fidelity import paragraph_layout
+        layout = paragraph_layout(paragraph)
+        properties = {"heading": heading, "alignment": alignment, **layout}
         if paragraph.paragraph_format.page_break_before:
             properties["page_break_before"] = True
         prefix = self.list_prefix(paragraph)
@@ -374,9 +379,11 @@ class _DocxReader:
             if runs or force:
                 blocks.append(_paragraph(runs, **properties))
                 runs = []
-                properties = {"heading": heading, "alignment": alignment}
+                properties = {"heading": heading, "alignment": alignment, **layout}
 
-        def visit(container, hyperlink=False):
+        field = {"active": False, "instruction": "", "skip": False}
+
+        def visit(container, hyperlink=None):
             nonlocal properties
             for child in container:
                 kind = _tag(child)
@@ -385,11 +392,14 @@ class _DocxReader:
                     formatting = _docx_style(run, paragraph)
                     if hyperlink:
                         formatting["underline"] = True
+                        formatting["href"] = hyperlink
                     for item in child:
                         item_kind = _tag(item)
                         if item_kind in ("t", "instrText"):
                             if item_kind == "instrText":
-                                _warn(self.warnings, "DOCX fields are preserved as their cached text; instructions are omitted.")
+                                field["instruction"] += item.text or ""
+                                continue
+                            if field["skip"]:
                                 continue
                             _append_run(runs, _run(item.text or "", **formatting))
                         elif item_kind == "tab":
@@ -401,11 +411,18 @@ class _DocxReader:
                             else:
                                 _append_run(runs, _run("\n", **formatting))
                         elif item_kind == "drawing":
-                            image = self.image(item)
+                            image = self.image(item, getattr(self, "note_part", None) or parent.part)
                             if image:
                                 flush()
                                 blocks.append(image)
-                        elif item_kind in ("pict", "object", "footnoteReference", "endnoteReference"):
+                        elif item_kind == "footnoteReference":
+                            note_id = item.get(qn("w:id"))
+                            note = self.notes.get(note_id)
+                            if note is not None:
+                                _append_run(runs, _run("", footnote=note))
+                            else:
+                                _warn(self.warnings, "An unresolved DOCX footnote was omitted.")
+                        elif item_kind in ("pict", "object", "endnoteReference"):
                             _warn(self.warnings, f"Unsupported DOCX inline content was omitted: {item_kind}")
                         elif item_kind == "noBreakHyphen":
                             _append_run(runs, _run("‑", **formatting))
@@ -414,10 +431,25 @@ class _DocxReader:
                         elif item_kind == "sym":
                             _warn(self.warnings, "A font-specific DOCX symbol was omitted.")
                         elif item_kind == "fldChar":
-                            _warn(self.warnings, "DOCX fields are preserved as their cached text; instructions are omitted.")
+                            field_type = item.get(qn("w:fldCharType"))
+                            if field_type == "begin":
+                                field.update(active=True, instruction="", skip=False)
+                            elif field_type == "separate":
+                                instruction = field["instruction"].strip().split()
+                                if instruction and instruction[0].upper() == "PAGE":
+                                    _append_run(runs, _run("", field="page", **formatting))
+                                    field["skip"] = True
+                                else:
+                                    _warn(self.warnings, "Unsupported DOCX fields retain cached text only.")
+                            elif field_type == "end":
+                                field.update(active=False, instruction="", skip=False)
                 elif kind == "hyperlink":
-                    _warn(self.warnings, "Hyperlinks are converted to formatted text; link targets are omitted.")
-                    visit(child, hyperlink=True)
+                    rel_id = child.get(qn("r:id"))
+                    rel = (getattr(self, "note_part", None) or parent.part).rels.get(rel_id) if rel_id else None
+                    target = rel.target_ref if rel is not None else None
+                    if target is None:
+                        _warn(self.warnings, "Internal or unresolved DOCX links retain text only.")
+                    visit(child, hyperlink=target)
                 elif kind in ("ins", "del", "moveFrom", "moveTo"):
                     _warn(self.warnings, "DOCX tracked changes are flattened to the current accepted text.")
                     if kind in ("ins", "moveTo"):
@@ -428,8 +460,12 @@ class _DocxReader:
                     if content is not None:
                         visit(content, hyperlink)
                 elif kind == "fldSimple":
-                    _warn(self.warnings, "DOCX fields are preserved as their cached text; instructions are omitted.")
-                    visit(child, hyperlink)
+                    instruction = child.get(qn("w:instr"), "").strip().split()
+                    if instruction and instruction[0].upper() == "PAGE":
+                        _append_run(runs, _run("", field="page"))
+                    else:
+                        _warn(self.warnings, "Unsupported DOCX fields retain cached text only.")
+                        visit(child, hyperlink)
                 elif kind not in ("pPr", "bookmarkStart", "bookmarkEnd", "proofErr"):
                     _warn(self.warnings, f"Unsupported DOCX paragraph feature: {kind}")
         visit(element)
@@ -480,7 +516,7 @@ class _DocxReader:
             _warn(self.warnings, "DOCX tables with omitted leading or trailing grid cells may lose alignment.")
         if element.xpath("./w:tblPr/w:tblpPr"):
             _warn(self.warnings, "Floating DOCX tables are converted to inline tables.")
-        return {"type": "table", "rows": rows, "col_widths": widths}
+        return {"type": "table", "rows": rows, "col_widths": widths, "width_unit": "pt"}
 
     def body(self, element, parent):
         from docx.oxml.ns import qn
@@ -512,12 +548,10 @@ def _parse_docx(source, assets, warnings):
         if sum(entry.file_size for entry in archive.infolist()) > MAX_DOCX_BYTES:
             raise ValueError("DOCX expanded data exceeds 512 MiB.")
         names = set(archive.namelist())
-        for feature, label in (("footnotes", "footnotes"), ("endnotes", "endnotes"),
+        for feature, label in (("endnotes", "endnotes"),
                                ("comments", "comments"), ("vbaProject", "macros")):
             if any(feature in name for name in names):
                 _warn(warnings, f"DOCX {label} are not included in the converted body.")
-        if any(name.startswith(("word/header", "word/footer")) for name in names):
-            _warn(warnings, "DOCX headers and footers are not included in the converted body.")
     document = Document(source)
     if len(document.sections) > 1:
         _warn(warnings, "Multiple DOCX sections are flattened; section-specific layout is not retained.")
@@ -525,7 +559,27 @@ def _parse_docx(source, assets, warnings):
         _warn(warnings, "DOCX multi-column layout is not retained.")
     if document.element.xpath(".//w:txbxContent"):
         _warn(warnings, "DOCX text boxes are not included in the converted body.")
-    return _DocxReader(document, assets, warnings).body(document.element.body, document)
+    from docx.oxml import parse_xml
+    from docx.oxml.ns import qn
+    from .fidelity import page_layout
+    reader = _DocxReader(document, assets, warnings)
+    with zipfile.ZipFile(source) as archive:
+        if "word/footnotes.xml" in archive.namelist():
+            reader.note_part = next((part for part in document.part.related_parts.values()
+                                     if str(part.partname) == "/word/footnotes.xml"), None)
+            notes = parse_xml(archive.read("word/footnotes.xml"))
+            for note in notes:
+                if note.get(qn("w:type")) in ("separator", "continuationSeparator"):
+                    continue
+                reader.notes[note.get(qn("w:id"))] = reader.body(note, document)
+    reader.note_part = None
+    section = document.sections[0]
+    if section.different_first_page_header_footer or document.settings.odd_and_even_pages_header_footer:
+        _warn(warnings, "DOCX first-page and odd/even header/footer variants are not retained.")
+    blocks = reader.body(document.element.body, document)
+    return {"blocks": blocks, "page": page_layout(section),
+            "header": reader.body(section.header._element, section.header),
+            "footer": reader.body(section.footer._element, section.footer)}
 
 
 def parse_input(path, asset_dir):
@@ -539,6 +593,6 @@ def parse_input(path, asset_dir):
     assets = Path(asset_dir).expanduser().resolve()
     assets.mkdir(parents=True, exist_ok=True)
     warnings = []
-    blocks = (_parse_docx(source, assets, warnings) if suffix == ".docx"
-              else _parse_md(source, assets, warnings))
-    return {"blocks": blocks, "warnings": warnings}
+    parsed = (_parse_docx(source, assets, warnings) if suffix == ".docx"
+              else {"blocks": _parse_md(source, assets, warnings)})
+    return {**parsed, "warnings": warnings}

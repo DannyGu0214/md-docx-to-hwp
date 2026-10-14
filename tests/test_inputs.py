@@ -184,9 +184,9 @@ class InputTests(unittest.TestCase):
         parsed = self.save_docx(document)
         self.assertEqual(paragraph_text(parsed["blocks"][0]), "본문 링크")
         warnings = parsed["warnings"]
-        self.assertTrue(any("headers" in w for w in warnings))
-        self.assertTrue(any("Hyperlinks" in w for w in warnings))
-        self.assertTrue(any("footnoteReference" in w for w in warnings))
+        self.assertEqual(paragraph_text(parsed["header"][0]), "머리말")
+        self.assertTrue(any("unresolved DOCX links" in w for w in warnings))
+        self.assertTrue(any("unresolved DOCX footnote" in w for w in warnings))
         self.assertTrue(any("pict" in w for w in warnings))
 
     def test_image_asset_symlink_rejected(self):
