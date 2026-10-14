@@ -1,9 +1,8 @@
 # Md-docx-to-hwp
 
-**Md-docx-to-hwp**는 Markdown과 DOCX를 바이너리 HWP 5 문서로 변환하는 로컬 도구예요.
-Markdown·DOCX → HWP 단방향 변환에 집중하며, HWP → DOCX 변환은 개발 범위에 포함하지 않아요.
-Python으로 입력을 읽고 공개 Java 라이브러리 hwplib로 HWP를 작성해요.
-Polaris Office의 원본 코드·APK·네이티브 라이브러리는 포함하지 않아요.
+- **Md-docx-to-hwp**는 Markdown과 DOCX를 바이너리 HWP 5 문서로 변환하는 로컬 도구예요.
+- Markdown·DOCX → HWP 단방향 변환에 집중하며, HWP → DOCX 변환은 개발 범위에 포함하지 않아요.
+- Python으로 입력을 읽고 공개 Java 라이브러리 hwplib로 HWP를 작성해요.
 
 ## 설치 및 실행
 
