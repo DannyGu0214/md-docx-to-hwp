@@ -1,0 +1,4 @@
+#!/bin/sh
+task_root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+task_python=${HWP_CONVERTER_PYTHON:-/Users/dannygu/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3}
+exec "$task_python" "$task_root/convert.py" "$@"

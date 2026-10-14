@@ -1,0 +1,7 @@
+__pycache__/
+build/
+verification/
+vendor/python/
+research/
+.venv/
+.DS_Store
